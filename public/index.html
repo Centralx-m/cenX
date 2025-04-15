@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>cenX Grid Trading Bot</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>cenX Grid Trading Bot</h1>
+        
+        <div class="api-config">
+            <h2>API Configuration</h2>
+            <input type="text" id="apiKey" placeholder="Bitget API Key">
+            <input type="text" id="apiSecret" placeholder="Bitget API Secret">
+            <input type="text" id="apiPassphrase" placeholder="Bitget API Passphrase">
+        </div>
+        
+        <div class="trading-config">
+            <h2>Trading Configuration</h2>
+            <select id="tradingPair">
+                <option value="">Select Trading Pair</option>
+                <!-- Will be populated by JavaScript -->
+            </select>
+            <div class="grid-config">
+                <label>Grid Level: $2 per order</label>
+                <label>Sell: 100% of position</label>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button id="startBtn">Start Bot</button>
+            <button id="stopBtn" disabled>Stop Bot</button>
+            <button id="statusBtn">Check Status</button>
+        </div>
+        
+        <div class="logs">
+            <h2>Activity Log</h2>
+            <div id="logOutput"></div>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+                                             </html>
