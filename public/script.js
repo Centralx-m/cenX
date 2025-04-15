@@ -159,3 +159,50 @@ document.addEventListener('DOMContentLoaded', function() {
         logOutput.scrollTop = logOutput.scrollHeight;
     }
 })
+// ... existing code ...
+
+async function fetchAvailablePairs() {
+    logMessage('Fetching available trading pairs...');
+    
+    try {
+        const response = await fetch('/api/trading/pairs');
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success && data.data && Array.isArray(data.data)) {
+            // Clear existing options except the first one
+            while (tradingPairSelect.options.length > 1) {
+                tradingPairSelect.remove(1);
+            }
+            
+            // Sort pairs alphabetically
+            const sortedPairs = data.data.sort((a, b) => a.symbol.localeCompare(b.symbol));
+            
+            // Add new options
+            sortedPairs.forEach(pair => {
+                const option = document.createElement('option');
+                option.value = pair.symbol;
+                option.textContent = `${pair.baseCoin}/${pair.quoteCoin} (${pair.symbol})`;
+                option.dataset.minAmount = pair.minOrderAmount;
+                option.dataset.pricePrecision = pair.pricePrecision;
+                tradingPairSelect.appendChild(option);
+            });
+            
+            logMessage(`Successfully loaded ${data.data.length} trading pairs`);
+        } else {
+            throw new Error(data.message || 'Invalid data format received');
+        }
+    } catch (error) {
+        logMessage(`Error loading trading pairs: ${error.message}`);
+        console.error('Pair fetch error:', error);
+        
+        // Optionally retry after delay
+        setTimeout(fetchAvailablePairs, 5000);
+    }
+}
+
+// ... rest of your existing code ...
