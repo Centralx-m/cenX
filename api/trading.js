@@ -1,54 +1,58 @@
+import authMiddleware from './auth';
 const BitgetAPI = require('bitget-api');
 
-module.exports = async (req, res) => {
-    const { query } = require('url').parse(req.url, true);
-    const path = req.url.split('?')[0];
-    
+export default async function handler(req, res) {
+  // Apply auth middleware first
+  await authMiddleware(req, res, async () => {
     try {
-        if (req.method === 'GET' && path === '/api/trading/pairs') {
-            // Initialize Bitget client without auth for public endpoints
-            const client = new BitgetAPI();
+      const { method } = req;
+      const { symbol } = req.body;
+      const credentials = req.bitgetCredentials;
+
+      const client = new BitgetAPI({
+        apiKey: credentials.apiKey,
+        apiSecret: credentials.apiSecret,
+        apiPassphrase: credentials.apiPassphrase,
+        timeout: 10000
+      });
+
+      switch (method) {
+        case 'POST':
+          if (req.url === '/api/trading/start') {
+            // Start grid trading logic
+            const { gridAmount, sellPercentage } = req.body;
             
-            try {
-                // Fetch all spot markets
-                const markets = await client.publicGetSpotPublicProducts();
-                
-                if (markets && markets.data) {
-                    const spotPairs = markets.data
-                        .filter(market => market.status === 'online') // Only active markets
-                        .map(market => ({
-                            symbol: market.symbol,
-                            baseCoin: market.baseCoin,
-                            quoteCoin: market.quoteCoin,
-                            minOrderAmount: market.minOrderAmount,
-                            pricePrecision: market.pricePrecision
-                        }));
-                    
-                    res.setHeader('Content-Type', 'application/json');
-                    res.status(200).json({
-                        success: true,
-                        data: spotPairs
-                    });
-                } else {
-                    res.status(500).json({
-                        success: false,
-                        message: 'No market data received from Bitget'
-                    });
-                }
-            } catch (apiError) {
-                console.error('Bitget API error:', apiError);
-                res.status(500).json({
-                    success: false,
-                    message: 'Error fetching pairs from Bitget: ' + apiError.message
-                });
+            // Verify minimum order amount
+            const marketInfo = await client.publicGetSpotPublicProduct({
+              symbol: symbol
+            });
+            
+            if (gridAmount < marketInfo.data.minOrderAmount) {
+              return res.status(400).json({
+                error: `Minimum order amount is ${marketInfo.data.minOrderAmount}`
+              });
             }
-        }
-        // ... rest of your existing endpoints ...
+
+            // Implement your grid trading logic here
+            // ...
+
+            return res.status(200).json({ success: true });
+          }
+          break;
+
+        case 'GET':
+          if (req.url === '/api/trading/status') {
+            // Get bot status
+            // ...
+          }
+          break;
+
+        default:
+          return res.status(405).json({ error: 'Method not allowed' });
+      }
     } catch (error) {
-        console.error('Server error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Internal server error: ' + error.message
-        });
+      console.error('Trading error:', error);
+      return res.status(500).json({ error: error.message });
     }
-};
+  });
+}
