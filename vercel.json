@@ -2,17 +2,25 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/trading.js",
+      "src": "api/*.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
-      "src": "/api/.*",
+      "src": "/api/pairs",
+      "dest": "/api/pairs.js"
+    },
+    {
+      "src": "/api/trading/(.*)",
       "dest": "/api/trading.js"
     },
     {
       "src": "/(.*)",
       "dest": "/public/$1"
     }
-  ]
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
