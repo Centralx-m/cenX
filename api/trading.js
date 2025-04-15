@@ -73,3 +73,16 @@ async function placeMemeGridOrders(client, symbol, currentPrice, gridStep, gridA
     });
   }
           }
+// Add to trading.js
+   async function checkMemeCoinTrend(symbol) {
+     const client = new BitgetAPI();
+     const trades = await client.fetchTrades(symbol, since: Date.now() - 3600000);
+     const buyVolume = trades.filter(t => t.side === 'buy').reduce((a, b) => a + b.amount, 0);
+     const sellVolume = trades.filter(t => t.side === 'sell').reduce((a, b) => a + b.amount, 0);
+     
+     return {
+       ratio: buyVolume / sellVolume,
+       trend: buyVolume > sellVolume * 1.5 ? 'bullish' : 
+              sellVolume > buyVolume * 1.5 ? 'bearish' : 'neutral'
+     };
+   }
