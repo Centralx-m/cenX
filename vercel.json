@@ -2,25 +2,21 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/*.js",
-      "use": "@vercel/node"
+      "src": "api/*.py",
+      "use": "@vercel/python"
     }
   ],
   "routes": [
     {
-      "src": "/api/pairs",
-      "dest": "/api/pairs.js"
+      "src": "/grid-bot",
+      "dest": "api/grid_bot.py"
     },
     {
-      "src": "/api/trading/(.*)",
-      "dest": "/api/trading.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/public/$1"
+      "src": "/",
+      "dest": "api/grid_bot.py"
     }
   ],
   "env": {
-    "NODE_ENV": "production"
+    "PYTHON_VERSION": "3.9"
   }
 }
