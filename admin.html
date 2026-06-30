@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Panel - Bauchi Election Watch</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css" />
+    <link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+    
+    <!-- ========================================== -->
+    <!-- HEADER                                     -->
+    <!-- ========================================== -->
+    <header class="header">
+        <div class="container">
+            <div class="header-inner">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <span>W</span>
+                    </div>
+                    <span class="logo-text">WebHotel<span class="logo-accent">.Cloud</span></span>
+                    <span class="logo-badge">| ADMIN PANEL</span>
+                </div>
+                
+                <div class="header-status">
+                    <div class="live-indicator">
+                        <span class="live-dot"></span>
+                        <span class="live-text">ADMIN</span>
+                    </div>
+                    <span class="header-time" id="adminTime">Last Update: 14:30 WAT</span>
+                    <button class="btn btn-danger btn-sm" onclick="logoutAdmin()">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- ========================================== -->
+    <!-- MAIN CONTENT                               -->
+    <!-- ========================================== -->
+    <main class="main-content">
+        <div class="container">
+
+            <!-- ====================================== -->
+            <!-- ADMIN TABS                             -->
+            <!-- ====================================== -->
+            <div class="admin-tabs">
+                <button class="tab-btn active" data-tab="dashboard">
+                    <i class="fas fa-chart-pie"></i> Dashboard
+                </button>
+                <button class="tab-btn" data-tab="elections">
+                    <i class="fas fa-vote-yea"></i> Elections
+                </button>
+                <button class="tab-btn" data-tab="agents">
+                    <i class="fas fa-users"></i> Agents
+                </button>
+                <button class="tab-btn" data-tab="assignments">
+                    <i class="fas fa-user-plus"></i> Assignments
+                </button>
+                <button class="tab-btn" data-tab="results">
+                    <i class="fas fa-file-alt"></i> Results
+                </button>
+                <button class="tab-btn" data-tab="audit">
+                    <i class="fas fa-history"></i> Audit Log
+                </button>
+            </div>
+
+            <!-- ====================================== -->
+            <!-- TAB 1: DASHBOARD                      -->
+            <!-- ====================================== -->
+            <div class="tab-content active" id="tab-dashboard">
+                <div class="stats-grid admin-stats-grid">
+                    <div class="stat-card stat-card-blue">
+                        <p class="stat-label">Total Elections</p>
+                        <p class="stat-value" id="totalElections">0</p>
+                        <p class="stat-sub"><span id="activeElections">0</span> active</p>
+                    </div>
+                    <div class="stat-card stat-card-cyan">
+                        <p class="stat-label">Total Agents</p>
+                        <p class="stat-value" id="totalAgents">0</p>
+                        <p class="stat-sub"><span id="onlineAgents">0</span> online</p>
+                    </div>
+                    <div class="stat-card stat-card-green">
+                        <p class="stat-label">Total Results</p>
+                        <p class="stat-value" id="totalResults">0</p>
+                        <p class="stat-sub"><span id="pendingResults">0</span> pending</p>
+                    </div>
+                    <div class="stat-card stat-card-yellow">
+                        <p class="stat-label">Voter Turnout</p>
+                        <p class="stat-value" id="totalTurnout">0%</p>
+                        <p class="stat-sub">Overall average</p>
+                    </div>
+                </div>
+
+                <!-- Election Type Distribution -->
+                <div class="dashboard-grid">
+                    <div class="dashboard-card">
+                        <h3 class="card-title">Elections by Type</h3>
+                        <div class="election-type-stats" id="electionTypeStats">
+                            <div class="type-stat">
+                                <span class="type-label">National</span>
+                                <span class="type-count" id="nationalCount">0</span>
+                                <div class="progress-bar">
+                                    <div class="progress-fill progress-blue" id="nationalBar" style="width: 0%"></div>
+                                </div>
+                            </div>
+                            <div class="type-stat">
+                                <span class="type-label">State</span>
+                                <span class="type-count" id="stateCount">0</span>
+                                <div class="progress-bar">
+                                    <div class="progress-fill progress-cyan" id="stateBar" style="width: 0%"></div>
+                                </div>
+                            </div>
+                            <div class="type-stat">
+                                <span class="type-label">Local Government</span>
+                                <span class="type-count" id="lgaCount">0</span>
+                                <div class="progress-bar">
+                                    <div class="progress-fill progress-green" id="lgaBar" style="width: 0%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-card">
+                        <h3 class="card-title">Recent Activity</h3>
+                        <div class="recent-activity" id="recentActivity">
+                            <p class="empty-state">No recent activity</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ====================================== -->
+            <!-- TAB 2: ELECTIONS                      -->
+            <!-- ====================================== -->
+            <div class="tab-content" id="tab-elections">
+                <div class="card-header-actions">
+                    <h3 class="card-title">Manage Elections</h3>
+                    <button class="btn btn-primary" onclick="showCreateElection()">
+                        <i class="fas fa-plus"></i> Create Election
+                    </button>
+                </div>
+
+                <!-- Election Filters -->
+                <div class="filters">
+                    <select id="electionTypeFilter" onchange="filterElections()">
+                        <option value="all">All Types</option>
+                        <option value="national">National</option>
+                        <option value="state">State</option>
+                        <option value="local_government">Local Government</option>
+                    </select>
+                    <select id="electionStatusFilter" onchange="filterElections()">
+                        <option value="all">All Status</option>
+                        <option value="draft">Draft</option>
+                        <option value="active">Active</option>
+                        <option value="ongoing">Ongoing</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+
+                <div class="election-list" id="electionList">
+                    <!-- Elections rendered by JS -->
+                </div>
+            </div>
+
+            <!-- ====================================== -->
+            <!-- TAB 3: AGENTS                         -->
+            <!-- ====================================== -->
+            <div class="tab-content" id="tab-agents">
+                <div class="card-header-actions">
+                    <h3 class="card-title">All Agents</h3>
+                    <button class="btn btn-secondary" onclick="refreshAgents()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+
+                <div class="table-wrapper">
+                    <table class="admin-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Phone</th>
+                                <th>Polling Unit</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="agentsTableBody">
+                            <tr>
+                                <td colspan="6" class="empty-state">Loading agents...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ====================================== -->
+            <!-- TAB 4: ASSIGNMENTS                    -->
+            <!-- ====================================== -->
+            <div class="tab-content" id="tab-assignments">
+                <div class="card-header-actions">
+                    <h3 class="card-title">Assign Agents to Elections</h3>
+                </div>
+
+                <!-- Assignment Form -->
+                <div class="assignment-form">
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Select Election</label>
+                            <select id="assignElection" onchange="loadElectionInfo()">
+                                <option value="">Select an election...</option>
+                            </select>
+                        </div>
+                        <div class="form-group half">
+                            <label>Select Agent</label>
+                            <select id="assignAgent">
+                                <option value="">Select an agent...</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Polling Unit UID</label>
+                            <input type="text" id="assignPollingUnit" placeholder="e.g., BAU-001-001" />
+                        </div>
+                        <div class="form-group half" style="display: flex; align-items: flex-end;">
+                            <button class="btn btn-primary" onclick="assignAgent()">
+                                <i class="fas fa-user-plus"></i> Assign Agent
+                            </button>
+                        </div>
+                    </div>
+                    <div id="electionInfo" style="display: none; background: #f8faff; padding: 12px 16px; border-radius: 8px; margin-top: 8px;">
+                        <p><strong>Election:</strong> <span id="electionInfoTitle">-</span></p>
+                        <p><strong>Type:</strong> <span id="electionInfoType">-</span></p>
+                        <p><strong>Status:</strong> <span id="electionInfoStatus">-</span></p>
+                        <p><strong>Agents Assigned:</strong> <span id="electionInfoAgents">0</span></p>
+                    </div>
+                </div>
+
+                <!-- Current Assignments -->
+                <div class="assignment-list" id="assignmentList">
+                    <h4>Current Assignments</h4>
+                    <div id="assignmentsTable">
+                        <p class="empty-state">No assignments yet</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ====================================== -->
+            <!-- TAB 5: RESULTS                        -->
+            <!-- ====================================== -->
+            <div class="tab-content" id="tab-results">
+                <div class="card-header-actions">
+                    <h3 class="card-title">Election Results</h3>
+                    <select id="resultElectionFilter" onchange="loadElectionResults()">
+                        <option value="">Select an election...</option>
+                    </select>
+                </div>
+
+                <div class="results-summary" id="resultsSummary">
+                    <div class="summary-cards" id="summaryCards">
+                        <p class="empty-state">Select an election to view results</p>
+                    </div>
+                </div>
+
+                <div class="table-wrapper">
+                    <table class="admin-table">
+                        <thead>
+                            <tr>
+                                <th>Polling Unit</th>
+                                <th>Agent</th>
+                                <th>Accredited</th>
+                                <th>Valid</th>
+                                <th>Rejected</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsTableBody">
+                            <tr>
+                                <td colspan="7" class="empty-state">No results found</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ====================================== -->
+            <!-- TAB 6: AUDIT LOG                      -->
+            <!-- ====================================== -->
+            <div class="tab-content" id="tab-audit">
+                <div class="card-header-actions">
+                    <h3 class="card-title">Audit Log</h3>
+                    <button class="btn btn-secondary" onclick="refreshAuditLog()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+
+                <div class="table-wrapper">
+                    <table class="admin-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Collection</th>
+                                <th>Record</th>
+                            </tr>
+                        </thead>
+                        <tbody id="auditTableBody">
+                            <tr>
+                                <td colspan="5" class="empty-state">No audit logs</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- ========================================== -->
+    <!-- CREATE ELECTION MODAL                      -->
+    <!-- ========================================== -->
+    <div class="modal-overlay" id="createElectionModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Create New Election</h2>
+                <button class="modal-close" onclick="closeModal('createElectionModal')">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="createElectionForm" onsubmit="handleCreateElection(event)">
+                <div class="form-group">
+                    <label>Election Title</label>
+                    <input type="text" id="electionTitle" placeholder="e.g., 2026 National Election" required />
+                </div>
+                <div class="form-group">
+                    <label>Election Type</label>
+                    <select id="electionType" required>
+                        <option value="">Select type...</option>
+                        <option value="national">National</option>
+                        <option value="state">State</option>
+                        <option value="local_government">Local Government</option>
+                    </select>
+                </div>
+                <div class="form-group" id="stateField" style="display: none;">
+                    <label>State</label>
+                    <input type="text" id="electionState" placeholder="e.g., Bauchi" />
+                </div>
+                <div class="form-group" id="lgaField" style="display: none;">
+                    <label>Local Government</label>
+                    <input type="text" id="electionLga" placeholder="e.g., Bauchi" />
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="electionDescription" rows="3" placeholder="Brief description of the election"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group half">
+                        <label>Start Date</label>
+                        <input type="datetime-local" id="electionStartDate" />
+                    </div>
+                    <div class="form-group half">
+                        <label>End Date</label>
+                        <input type="datetime-local" id="electionEndDate" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Parties (comma-separated)</label>
+                    <input type="text" id="electionParties" placeholder="APC, PDP, LP, NNPP" />
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 14px;">
+                    <i class="fas fa-plus-circle"></i> Create Election
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- VIEW RESULT MODAL                         -->
+    <!-- ========================================== -->
+    <div class="modal-overlay" id="viewResultModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Result Details</h2>
+                <button class="modal-close" onclick="closeModal('viewResultModal')">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div id="resultDetails">
+                <!-- Rendered by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- TOAST CONTAINER                           -->
+    <!-- ========================================== -->
+    <div id="toastContainer"></div>
+
+    <script type="module" src="js/admin.js"></script>
+</body>
+</html>
