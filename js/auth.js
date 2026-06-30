@@ -1,71 +1,62 @@
 /**
  * ============================================
- * AUTHENTICATION SYSTEM - Login & Register
+ * AUTHENTICATION SYSTEM - Firebase Integration
  * Bauchi State Election Watch
  * Powered by WebHotel.Cloud
  * ============================================
  */
 
+import {
+    auth,
+    registerAgent,
+    loginAgent,
+    logoutAgent,
+    getCurrentUser,
+    onAuthStateChange,
+    getAgentData,
+    COLLECTIONS,
+    db,
+    formatTimestamp,
+    getPollingUnit,
+    seedLGAs
+} from './firebase-config.js';
+
 // ============================================
-// AGENT DATA STORE (Simulated Database)
+// STATE
 // ============================================
-const AgentDB = {
-    // Pre-registered agents with their polling units
-    agents: [
-        {
-            id: 1,
-            firstName: 'John',
-            lastName: 'Doe',
-            email: 'john@example.com',
-            password: 'password123',
-            phone: '08012345678',
-            pollingUnitUID: 'BAU-001-001',
-            lga: 'Bauchi',
-            ward: 'Central',
-            registeredVoters: 850,
-            isVerified: true
-        },
-        {
-            id: 2,
-            firstName: 'Amina',
-            lastName: 'Mohammed',
-            email: 'amina@example.com',
-            password: 'password123',
-            phone: '08087654321',
-            pollingUnitUID: 'BAU-002-015',
-            lga: 'Toro',
-            ward: 'North',
-            registeredVoters: 620,
-            isVerified: true
-        },
-        {
-            id: 3,
-            firstName: 'Musa',
-            lastName: 'Sani',
-            email: 'musa@example.com',
-            password: 'password123',
-            phone: '08044556677',
-            pollingUnitUID: 'BAU-003-042',
-            lga: 'Ningi',
-            ward: 'East',
-            registeredVoters: 740,
-            isVerified: true
-        }
-    ],
-    
-    // Submissions history
-    submissions: {}
-};
+let currentUser = null;
+let currentAgent = null;
 
 // ============================================
 // TOAST NOTIFICATIONS
 // ============================================
 function showToast(message, type = 'success') {
     const container = document.getElementById('toastContainer');
-    if (!container) return;
+    if (!container) {
+        const div = document.createElement('div');
+        div.id = 'toastContainer';
+        div.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-width: 380px;
+        `;
+        document.body.appendChild(div);
+    }
     
+    const container2 = document.getElementById('toastContainer');
     const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
+    
+    const colors = {
+        success: '#00C853',
+        error: '#FF1744',
+        warning: '#FFB300',
+        info: '#0066FF'
+    };
     
     const icons = {
         success: '✅',
@@ -74,8 +65,23 @@ function showToast(message, type = 'success') {
         info: 'ℹ️'
     };
     
+    toast.style.cssText = `
+        padding: 14px 20px;
+        border-radius: 10px;
+        background: ${colors[type] || '#0066FF'};
+        color: white;
+        font-family: 'Inter', sans-serif;
+        font-weight: 500;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        animation: slideIn 0.4s ease;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 14px;
+    `;
+    
     toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span> ${message}`;
-    container.appendChild(toast);
+    container2.appendChild(toast);
     
     setTimeout(() => {
         toast.style.opacity = '0';
@@ -86,89 +92,84 @@ function showToast(message, type = 'success') {
 }
 
 // ============================================
-// TOGGLE PASSWORD VISIBILITY
+// TOGGLE PASSWORD
 // ============================================
 function togglePassword(fieldId) {
     const field = document.getElementById(fieldId);
-    const button = field.parentElement.querySelector('.toggle-password i');
+    if (!field) return;
     
+    const button = field.parentElement.querySelector('.toggle-password i');
     if (field.type === 'password') {
         field.type = 'text';
-        button.className = 'fas fa-eye-slash';
+        if (button) button.className = 'fas fa-eye-slash';
     } else {
         field.type = 'password';
-        button.className = 'fas fa-eye';
+        if (button) button.className = 'fas fa-eye';
     }
 }
 
 // ============================================
-// AUTH FUNCTIONS
+// LOGIN HANDLER
 // ============================================
-
-/**
- * Login Handler
- */
-function handleLogin(e) {
+async function handleLogin(e) {
     e.preventDefault();
     
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
-    const remember = document.getElementById('rememberMe').checked;
+    const remember = document.getElementById('rememberMe')?.checked || false;
     
     if (!email || !password) {
         showToast('Please fill in all fields', 'error');
         return;
     }
     
-    // Find agent
-    const agent = AgentDB.agents.find(a => a.email === email);
+    const btn = e.target.querySelector('.btn-auth');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Logging in...';
     
-    if (!agent) {
-        showToast('Invalid email or password', 'error');
-        return;
+    const result = await loginAgent(email, password);
+    
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login';
+    
+    if (result.success) {
+        currentUser = result.user;
+        currentAgent = result.agentData;
+        
+        if (remember) {
+            localStorage.setItem('rememberedEmail', email);
+        }
+        
+        showToast(`Welcome back, ${result.agentData?.firstName || 'Agent'}! 🎉`, 'success');
+        
+        // Redirect based on role
+        if (result.agentData?.role === 'admin') {
+            setTimeout(() => window.location.href = 'admin.html', 800);
+        } else {
+            setTimeout(() => window.location.href = 'agent-dashboard.html', 800);
+        }
+    } else {
+        showToast(result.error || 'Login failed', 'error');
     }
-    
-    if (agent.password !== password) {
-        showToast('Invalid email or password', 'error');
-        return;
-    }
-    
-    // Login successful
-    if (remember) {
-        localStorage.setItem('rememberedAgent', JSON.stringify({
-            email: agent.email,
-            id: agent.id
-        }));
-    }
-    
-    // Store session
-    sessionStorage.setItem('currentAgent', JSON.stringify(agent));
-    
-    showToast(`Welcome back, ${agent.firstName}! 🎉`, 'success');
-    
-    // Redirect to agent dashboard
-    setTimeout(() => {
-        window.location.href = 'agent-dashboard.html';
-    }, 800);
 }
 
-/**
- * Register Handler
- */
-function handleRegister(e) {
+// ============================================
+// REGISTER HANDLER
+// ============================================
+async function handleRegister(e) {
     e.preventDefault();
     
     const firstName = document.getElementById('regFirstName').value.trim();
     const lastName = document.getElementById('regLastName').value.trim();
     const email = document.getElementById('regEmail').value.trim();
     const phone = document.getElementById('regPhone').value.trim();
-    const pollingUnit = document.getElementById('regPollingUnit').value.trim().toUpperCase();
+    const pollingUnitUID = document.getElementById('regPollingUnit').value.trim().toUpperCase();
     const password = document.getElementById('regPassword').value;
     const confirmPassword = document.getElementById('regConfirmPassword').value;
-    const agreeTerms = document.getElementById('agreeTerms').checked;
+    const agreeTerms = document.getElementById('agreeTerms')?.checked || false;
     
     // Validation
-    if (!firstName || !lastName || !email || !phone || !pollingUnit || !password) {
+    if (!firstName || !lastName || !email || !phone || !pollingUnitUID || !password) {
         showToast('Please fill in all fields', 'error');
         return;
     }
@@ -188,79 +189,124 @@ function handleRegister(e) {
         return;
     }
     
-    // Check if email already registered
-    if (AgentDB.agents.some(a => a.email === email)) {
-        showToast('This email is already registered', 'error');
+    // Check if polling unit exists
+    const puResult = await getPollingUnit(pollingUnitUID);
+    if (!puResult.success) {
+        showToast('Invalid Polling Unit UID. Please check with your coordinator.', 'error');
         return;
     }
     
-    // Check if polling unit UID exists in our database
-    // In production, this would check against INEC data
-    const validUIDs = AgentDB.agents.map(a => a.pollingUnitUID);
-    // For demo, allow any UID
-    // In production, validate against official list
+    const btn = e.target.querySelector('.btn-auth');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Registering...';
     
-    // Create new agent
-    const newAgent = {
-        id: AgentDB.agents.length + 1,
+    const userData = {
         firstName,
         lastName,
-        email,
-        password,
         phone,
-        pollingUnitUID: pollingUnit,
-        lga: 'Pending Verification',
-        ward: 'Pending Verification',
-        registeredVoters: 0,
-        isVerified: false
+        pollingUnitUID,
+        lga: puResult.data.lga,
+        ward: puResult.data.ward || '',
+        registeredVoters: puResult.data.registeredVoters || 0,
+        deviceInfo: {
+            userAgent: navigator.userAgent,
+            platform: navigator.platform
+        }
     };
     
-    AgentDB.agents.push(newAgent);
+    const result = await registerAgent(email, password, userData);
     
-    showToast('Registration successful! Please wait for verification. 📝', 'success');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-user-plus"></i> Register';
     
-    // Clear form
-    document.getElementById('registerForm').reset();
-    
-    // Switch to login after 2 seconds
-    setTimeout(() => {
-        showLogin();
-        document.getElementById('loginEmail').value = email;
-        showToast('Please login after verification', 'info');
-    }, 2000);
+    if (result.success) {
+        showToast('Registration successful! Please check your email to verify your account. 📧', 'success');
+        
+        // Clear form
+        document.getElementById('registerForm').reset();
+        
+        // Switch to login
+        setTimeout(() => {
+            showLogin();
+            document.getElementById('loginEmail').value = email;
+            showToast('Please login after verifying your email', 'info');
+        }, 2000);
+    } else {
+        showToast(result.error || 'Registration failed', 'error');
+    }
 }
 
-/**
- * Show Register Form
- */
+// ============================================
+// LOGOUT HANDLER
+// ============================================
+async function handleLogout() {
+    if (!confirm('Are you sure you want to logout?')) return;
+    
+    const result = await logoutAgent();
+    if (result.success) {
+        showToast('Logged out successfully', 'info');
+        setTimeout(() => window.location.href = 'agent-login.html', 500);
+    } else {
+        showToast('Logout failed', 'error');
+    }
+}
+
+// ============================================
+// UI FUNCTIONS
+// ============================================
 function showRegister() {
-    document.querySelector('.auth-card:not(.register-card)').style.display = 'none';
-    document.getElementById('registerCard').style.display = 'block';
+    const loginCard = document.querySelector('.auth-card:not(.register-card)');
+    const registerCard = document.getElementById('registerCard');
+    if (loginCard) loginCard.style.display = 'none';
+    if (registerCard) registerCard.style.display = 'block';
 }
 
-/**
- * Show Login Form
- */
 function showLogin() {
-    document.querySelector('.auth-card:not(.register-card)').style.display = 'block';
-    document.getElementById('registerCard').style.display = 'none';
+    const loginCard = document.querySelector('.auth-card:not(.register-card)');
+    const registerCard = document.getElementById('registerCard');
+    if (loginCard) loginCard.style.display = 'block';
+    if (registerCard) registerCard.style.display = 'none';
 }
 
-/**
- * Check Remembered Session
- */
-function checkRememberedSession() {
-    const remembered = localStorage.getItem('rememberedAgent');
-    if (remembered) {
-        try {
-            const data = JSON.parse(remembered);
-            const agent = AgentDB.agents.find(a => a.id === data.id);
-            if (agent) {
-                sessionStorage.setItem('currentAgent', JSON.stringify(agent));
+// ============================================
+// CHECK AUTH STATE
+// ============================================
+function checkAuthState() {
+    onAuthStateChange(async (user) => {
+        if (user) {
+            currentUser = user;
+            
+            // Get agent data
+            const result = await getAgentData(user.uid);
+            if (result.success) {
+                currentAgent = result.data;
+                
+                // If on login page, redirect to dashboard
+                if (window.location.pathname.includes('agent-login.html')) {
+                    const role = result.data?.role || 'agent';
+                    window.location.href = role === 'admin' ? 'admin.html' : 'agent-dashboard.html';
+                }
             }
-        } catch (e) {
-            localStorage.removeItem('rememberedAgent');
+        } else {
+            currentUser = null;
+            currentAgent = null;
+            
+            // If on protected page, redirect to login
+            const protectedPages = ['agent-dashboard.html', 'admin.html'];
+            if (protectedPages.some(page => window.location.pathname.includes(page))) {
+                window.location.href = 'agent-login.html';
+            }
         }
+    });
+}
+
+// ============================================
+// SEED DATA (Development Only)
+// ============================================
+async function seedData() {
+    if (confirm('Seed LGAs into Firestore?')) {
+        await seedLGAs();
+        showToast('LGAs seeded successfully!', 'success');
     }
 }
 
@@ -268,14 +314,8 @@ function checkRememberedSession() {
 // EVENT LISTENERS
 // ============================================
 document.addEventListener('DOMContentLoaded', function() {
-    // Check for remembered session
-    checkRememberedSession();
-    
-    // If already logged in, redirect to dashboard
-    const currentAgent = sessionStorage.getItem('currentAgent');
-    if (currentAgent && window.location.pathname.includes('agent-login.html')) {
-        window.location.href = 'agent-dashboard.html';
-    }
+    // Check auth state
+    checkAuthState();
     
     // Login form
     const loginForm = document.getElementById('loginForm');
@@ -289,18 +329,23 @@ document.addEventListener('DOMContentLoaded', function() {
         registerForm.addEventListener('submit', handleRegister);
     }
     
-    // Enter key to login
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-            const loginForm = document.getElementById('loginForm');
-            if (loginForm && loginForm.style.display !== 'none') {
-                loginForm.dispatchEvent(new Event('submit'));
-            }
-        }
-    });
+    // Check remembered email
+    const remembered = localStorage.getItem('rememberedEmail');
+    if (remembered) {
+        const emailInput = document.getElementById('loginEmail');
+        if (emailInput) emailInput.value = remembered;
+    }
+    
+    // Seed data (for development)
+    // Uncomment to seed LGAs
+    // setTimeout(seedData, 2000);
 });
 
-// Expose functions globally
+// ============================================
+// EXPOSE GLOBALLY
+// ============================================
 window.togglePassword = togglePassword;
 window.showRegister = showRegister;
 window.showLogin = showLogin;
+window.handleLogout = handleLogout;
+window.showToast = showToast;
