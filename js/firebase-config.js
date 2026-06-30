@@ -1,12 +1,11 @@
 /**
  * ============================================
- * FIREBASE CONFIGURATION
+ * FIREBASE CONFIGURATION - Updated with Election Types
  * Bauchi State Election Watch
  * Powered by WebHotel.Cloud
  * ============================================
  */
 
-// Import Firebase modules
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
 import { 
     getAuth, 
@@ -15,7 +14,8 @@ import {
     signOut,
     onAuthStateChanged,
     sendEmailVerification,
-    updateProfile
+    updateProfile,
+    sendPasswordResetEmail
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 import {
     getFirestore,
@@ -34,7 +34,9 @@ import {
     increment,
     arrayUnion,
     arrayRemove,
-    Timestamp
+    Timestamp,
+    runTransaction,
+    limit
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
 import {
     getStorage,
@@ -77,23 +79,38 @@ const COLLECTIONS = {
     WARDS: 'wards',
     SUBMISSIONS: 'submissions',
     AUDIT_LOGS: 'audit_logs',
-    NOTIFICATIONS: 'notifications'
+    NOTIFICATIONS: 'notifications',
+    ELECTIONS: 'elections',           // NEW: Election types
+    ELECTION_AGENTS: 'election_agents', // NEW: Agent assignments
+    ELECTION_RESULTS: 'election_results', // NEW: Results per election
+    PARTIES: 'parties'
+};
+
+// ============================================
+// ELECTION TYPES
+// ============================================
+const ELECTION_TYPES = {
+    NATIONAL: 'national',
+    STATE: 'state',
+    LOCAL_GOVERNMENT: 'local_government'
+};
+
+const ELECTION_STATUS = {
+    DRAFT: 'draft',
+    ACTIVE: 'active',
+    ONGOING: 'ongoing',
+    COMPLETED: 'completed',
+    CANCELLED: 'cancelled'
 };
 
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
 
-/**
- * Generate a unique ID
- */
 function generateId() {
     return doc(collection(db, 'temp')).id;
 }
 
-/**
- * Format timestamp
- */
 function formatTimestamp(timestamp) {
     if (!timestamp) return 'N/A';
     if (timestamp instanceof Timestamp) {
@@ -102,35 +119,45 @@ function formatTimestamp(timestamp) {
     return new Date(timestamp).toLocaleString();
 }
 
-/**
- * Get current timestamp
- */
 function getCurrentTimestamp() {
     return serverTimestamp();
+}
+
+function getElectionTypeLabel(type) {
+    const labels = {
+        'national': 'National Election',
+        'state': 'State Election',
+        'local_government': 'Local Government Election'
+    };
+    return labels[type] || type;
+}
+
+function getStatusBadge(status) {
+    const badges = {
+        'draft': '<span class="badge badge-secondary">Draft</span>',
+        'active': '<span class="badge badge-primary">Active</span>',
+        'ongoing': '<span class="badge badge-warning">Ongoing</span>',
+        'completed': '<span class="badge badge-success">Completed</span>',
+        'cancelled': '<span class="badge badge-danger">Cancelled</span>'
+    };
+    return badges[status] || status;
 }
 
 // ============================================
 // AUTH FUNCTIONS
 // ============================================
 
-/**
- * Register new agent
- */
 async function registerAgent(email, password, userData) {
     try {
-        // Create user in Firebase Auth
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
         
-        // Update profile
         await updateProfile(user, {
             displayName: `${userData.firstName} ${userData.lastName}`
         });
         
-        // Send email verification
         await sendEmailVerification(user);
         
-        // Save agent data to Firestore
         const agentData = {
             uid: user.uid,
             firstName: userData.firstName,
@@ -148,17 +175,12 @@ async function registerAgent(email, password, userData) {
             updatedAt: getCurrentTimestamp(),
             lastLogin: null,
             profileImage: '',
-            deviceInfo: userData.deviceInfo || {}
+            deviceId: userData.deviceId || '',
+            deviceInfo: userData.deviceInfo || {},
+            assignedElections: [] // NEW: Elections assigned to agent
         };
         
         await setDoc(doc(db, COLLECTIONS.AGENTS, user.uid), agentData);
-        
-        // Create submission history subcollection
-        await setDoc(doc(db, COLLECTIONS.AGENTS, user.uid, 'history', 'stats'), {
-            totalSubmissions: 0,
-            lastSubmission: null,
-            createdAt: getCurrentTimestamp()
-        });
         
         return {
             success: true,
@@ -177,20 +199,15 @@ async function registerAgent(email, password, userData) {
     }
 }
 
-/**
- * Login agent
- */
 async function loginAgent(email, password) {
     try {
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
         
-        // Update last login
         await updateDoc(doc(db, COLLECTIONS.AGENTS, user.uid), {
             lastLogin: getCurrentTimestamp()
         });
         
-        // Get agent data
         const agentDoc = await getDoc(doc(db, COLLECTIONS.AGENTS, user.uid));
         const agentData = agentDoc.exists() ? agentDoc.data() : null;
         
@@ -211,9 +228,6 @@ async function loginAgent(email, password) {
     }
 }
 
-/**
- * Logout agent
- */
 async function logoutAgent() {
     try {
         await signOut(auth);
@@ -227,27 +241,600 @@ async function logoutAgent() {
     }
 }
 
-/**
- * Get current user
- */
 function getCurrentUser() {
     return auth.currentUser;
 }
 
-/**
- * Check auth state
- */
 function onAuthStateChange(callback) {
     return onAuthStateChanged(auth, callback);
+}
+
+// ============================================
+// ELECTION MANAGEMENT FUNCTIONS (Admin Only)
+// ============================================
+
+/**
+ * Create a new election
+ */
+async function createElection(electionData) {
+    try {
+        const electionId = generateId();
+        const data = {
+            electionId: electionId,
+            title: electionData.title,
+            type: electionData.type, // 'national', 'state', 'local_government'
+            description: electionData.description || '',
+            state: electionData.state || '',
+            lga: electionData.lga || '',
+            startDate: electionData.startDate || null,
+            endDate: electionData.endDate || null,
+            status: ELECTION_STATUS.DRAFT,
+            parties: electionData.parties || [],
+            positions: electionData.positions || [],
+            totalPollingUnits: 0,
+            totalAgents: 0,
+            totalResults: 0,
+            createdBy: electionData.createdBy,
+            createdAt: getCurrentTimestamp(),
+            updatedAt: getCurrentTimestamp(),
+            resultsSummary: {
+                totalVotes: 0,
+                validVotes: 0,
+                rejectedVotes: 0,
+                turnout: 0,
+                partyResults: {}
+            }
+        };
+        
+        await setDoc(doc(db, COLLECTIONS.ELECTIONS, electionId), data);
+        
+        // Log audit
+        await logAudit(electionData.createdBy, 'CREATE_ELECTION', COLLECTIONS.ELECTIONS, electionId, data);
+        
+        return {
+            success: true,
+            electionId: electionId,
+            data: data
+        };
+        
+    } catch (error) {
+        console.error('Error creating election:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Get all elections
+ */
+async function getAllElections() {
+    try {
+        const q = query(
+            collection(db, COLLECTIONS.ELECTIONS),
+            orderBy('createdAt', 'desc')
+        );
+        const querySnapshot = await getDocs(q);
+        const elections = [];
+        querySnapshot.forEach((doc) => {
+            elections.push({ id: doc.id, ...doc.data() });
+        });
+        return {
+            success: true,
+            data: elections
+        };
+    } catch (error) {
+        console.error('Error fetching elections:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Get election by ID
+ */
+async function getElection(electionId) {
+    try {
+        const docRef = doc(db, COLLECTIONS.ELECTIONS, electionId);
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists()) {
+            return {
+                success: true,
+                data: docSnap.data()
+            };
+        } else {
+            return {
+                success: false,
+                error: 'Election not found'
+            };
+        }
+    } catch (error) {
+        console.error('Error fetching election:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Update election
+ */
+async function updateElection(electionId, data) {
+    try {
+        await updateDoc(doc(db, COLLECTIONS.ELECTIONS, electionId), {
+            ...data,
+            updatedAt: getCurrentTimestamp()
+        });
+        
+        // Log audit
+        const user = getCurrentUser();
+        if (user) {
+            await logAudit(user.uid, 'UPDATE_ELECTION', COLLECTIONS.ELECTIONS, electionId, data);
+        }
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Error updating election:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Delete election
+ */
+async function deleteElection(electionId) {
+    try {
+        await deleteDoc(doc(db, COLLECTIONS.ELECTIONS, electionId));
+        
+        // Also delete all related data
+        // Delete election agents
+        const agentsQuery = query(
+            collection(db, COLLECTIONS.ELECTION_AGENTS),
+            where('electionId', '==', electionId)
+        );
+        const agentsSnapshot = await getDocs(agentsQuery);
+        agentsSnapshot.forEach(async (doc) => {
+            await deleteDoc(doc.ref);
+        });
+        
+        // Delete election results
+        const resultsQuery = query(
+            collection(db, COLLECTIONS.ELECTION_RESULTS),
+            where('electionId', '==', electionId)
+        );
+        const resultsSnapshot = await getDocs(resultsQuery);
+        resultsSnapshot.forEach(async (doc) => {
+            await deleteDoc(doc.ref);
+        });
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Error deleting election:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Get elections by type
+ */
+async function getElectionsByType(type) {
+    try {
+        const q = query(
+            collection(db, COLLECTIONS.ELECTIONS),
+            where('type', '==', type),
+            orderBy('createdAt', 'desc')
+        );
+        const querySnapshot = await getDocs(q);
+        const elections = [];
+        querySnapshot.forEach((doc) => {
+            elections.push({ id: doc.id, ...doc.data() });
+        });
+        return {
+            success: true,
+            data: elections
+        };
+    } catch (error) {
+        console.error('Error fetching elections by type:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Get active elections
+ */
+async function getActiveElections() {
+    try {
+        const q = query(
+            collection(db, COLLECTIONS.ELECTIONS),
+            where('status', 'in', ['active', 'ongoing']),
+            orderBy('createdAt', 'desc')
+        );
+        const querySnapshot = await getDocs(q);
+        const elections = [];
+        querySnapshot.forEach((doc) => {
+            elections.push({ id: doc.id, ...doc.data() });
+        });
+        return {
+            success: true,
+            data: elections
+        };
+    } catch (error) {
+        console.error('Error fetching active elections:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+// ============================================
+// AGENT ELECTION ASSIGNMENT (Admin Only)
+// ============================================
+
+/**
+ * Assign agent to election
+ */
+async function assignAgentToElection(electionId, agentId, pollingUnitUID) {
+    try {
+        // Check if already assigned
+        const existingQuery = query(
+            collection(db, COLLECTIONS.ELECTION_AGENTS),
+            where('electionId', '==', electionId),
+            where('agentId', '==', agentId)
+        );
+        const existing = await getDocs(existingQuery);
+        
+        if (!existing.empty) {
+            return {
+                success: false,
+                error: 'Agent already assigned to this election'
+            };
+        }
+        
+        const assignmentId = generateId();
+        const data = {
+            assignmentId: assignmentId,
+            electionId: electionId,
+            agentId: agentId,
+            pollingUnitUID: pollingUnitUID,
+            status: 'assigned', // assigned, active, completed
+            assignedAt: getCurrentTimestamp(),
+            updatedAt: getCurrentTimestamp(),
+            submissions: 0,
+            lastSubmission: null
+        };
+        
+        await setDoc(doc(db, COLLECTIONS.ELECTION_AGENTS, assignmentId), data);
+        
+        // Update agent's assigned elections
+        await updateDoc(doc(db, COLLECTIONS.AGENTS, agentId), {
+            assignedElections: arrayUnion(electionId),
+            updatedAt: getCurrentTimestamp()
+        });
+        
+        // Update election agent count
+        await updateDoc(doc(db, COLLECTIONS.ELECTIONS, electionId), {
+            totalAgents: increment(1),
+            updatedAt: getCurrentTimestamp()
+        });
+        
+        // Log audit
+        const user = getCurrentUser();
+        if (user) {
+            await logAudit(user.uid, 'ASSIGN_AGENT', COLLECTIONS.ELECTION_AGENTS, assignmentId, data);
+        }
+        
+        // Send notification to agent
+        await sendNotification(agentId, 'Election Assignment', 
+            `You have been assigned to election: ${electionId} for polling unit ${pollingUnitUID}`, 'info');
+        
+        return {
+            success: true,
+            assignmentId: assignmentId,
+            data: data
+        };
+        
+    } catch (error) {
+        console.error('Error assigning agent:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Get agents assigned to election
+ */
+async function getElectionAgents(electionId) {
+    try {
+        const q = query(
+            collection(db, COLLECTIONS.ELECTION_AGENTS),
+            where('electionId', '==', electionId)
+        );
+        const querySnapshot = await getDocs(q);
+        const assignments = [];
+        querySnapshot.forEach((doc) => {
+            assignments.push({ id: doc.id, ...doc.data() });
+        });
+        return {
+            success: true,
+            data: assignments
+        };
+    } catch (error) {
+        console.error('Error fetching election agents:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Get agent's assigned elections
+ */
+async function getAgentElections(agentId) {
+    try {
+        const q = query(
+            collection(db, COLLECTIONS.ELECTION_AGENTS),
+            where('agentId', '==', agentId)
+        );
+        const querySnapshot = await getDocs(q);
+        const assignments = [];
+        querySnapshot.forEach((doc) => {
+            assignments.push({ id: doc.id, ...doc.data() });
+        });
+        return {
+            success: true,
+            data: assignments
+        };
+    } catch (error) {
+        console.error('Error fetching agent elections:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Remove agent from election
+ */
+async function removeAgentFromElection(assignmentId, electionId, agentId) {
+    try {
+        await deleteDoc(doc(db, COLLECTIONS.ELECTION_AGENTS, assignmentId));
+        
+        // Remove from agent's assigned elections
+        await updateDoc(doc(db, COLLECTIONS.AGENTS, agentId), {
+            assignedElections: arrayRemove(electionId),
+            updatedAt: getCurrentTimestamp()
+        });
+        
+        // Update election agent count
+        await updateDoc(doc(db, COLLECTIONS.ELECTIONS, electionId), {
+            totalAgents: increment(-1),
+            updatedAt: getCurrentTimestamp()
+        });
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Error removing agent:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+// ============================================
+// ELECTION RESULTS SUBMISSION
+// ============================================
+
+/**
+ * Submit result for election
+ */
+async function submitElectionResult(agentId, electionId, resultData) {
+    try {
+        // Verify agent is assigned to this election
+        const assignmentQuery = query(
+            collection(db, COLLECTIONS.ELECTION_AGENTS),
+            where('electionId', '==', electionId),
+            where('agentId', '==', agentId)
+        );
+        const assignmentSnap = await getDocs(assignmentQuery);
+        
+        if (assignmentSnap.empty) {
+            return {
+                success: false,
+                error: 'You are not assigned to this election'
+            };
+        }
+        
+        const assignment = assignmentSnap.docs[0];
+        const assignmentId = assignment.id;
+        
+        // Check if result already submitted for this polling unit
+        const existingQuery = query(
+            collection(db, COLLECTIONS.ELECTION_RESULTS),
+            where('electionId', '==', electionId),
+            where('pollingUnitUID', '==', resultData.pollingUnitUID)
+        );
+        const existing = await getDocs(existingQuery);
+        
+        if (!existing.empty) {
+            return {
+                success: false,
+                error: 'Result already submitted for this polling unit'
+            };
+        }
+        
+        const resultId = generateId();
+        const data = {
+            resultId: resultId,
+            electionId: electionId,
+            agentId: agentId,
+            assignmentId: assignmentId,
+            pollingUnitUID: resultData.pollingUnitUID,
+            lga: resultData.lga,
+            ward: resultData.ward,
+            registeredVoters: resultData.registeredVoters,
+            accreditedVoters: resultData.accreditedVoters,
+            validVotes: resultData.validVotes,
+            rejectedVotes: resultData.rejectedVotes,
+            partyVotes: resultData.partyVotes,
+            totalPartyVotes: Object.values(resultData.partyVotes).reduce((a, b) => a + b, 0),
+            status: 'pending',
+            submittedAt: getCurrentTimestamp(),
+            updatedAt: getCurrentTimestamp(),
+            verifiedBy: null,
+            verifiedAt: null,
+            notes: resultData.notes || '',
+            attachments: resultData.attachments || []
+        };
+        
+        await setDoc(doc(db, COLLECTIONS.ELECTION_RESULTS, resultId), data);
+        
+        // Update assignment
+        await updateDoc(doc(db, COLLECTIONS.ELECTION_AGENTS, assignmentId), {
+            submissions: increment(1),
+            lastSubmission: getCurrentTimestamp(),
+            updatedAt: getCurrentTimestamp()
+        });
+        
+        // Update election total results
+        await updateDoc(doc(db, COLLECTIONS.ELECTIONS, electionId), {
+            totalResults: increment(1),
+            updatedAt: getCurrentTimestamp()
+        });
+        
+        // Log audit
+        await logAudit(agentId, 'SUBMIT_ELECTION_RESULT', COLLECTIONS.ELECTION_RESULTS, resultId, data);
+        
+        return {
+            success: true,
+            resultId: resultId,
+            data: data
+        };
+        
+    } catch (error) {
+        console.error('Error submitting election result:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Get election results
+ */
+async function getElectionResults(electionId) {
+    try {
+        const q = query(
+            collection(db, COLLECTIONS.ELECTION_RESULTS),
+            where('electionId', '==', electionId),
+            orderBy('submittedAt', 'desc')
+        );
+        const querySnapshot = await getDocs(q);
+        const results = [];
+        querySnapshot.forEach((doc) => {
+            results.push({ id: doc.id, ...doc.data() });
+        });
+        return {
+            success: true,
+            data: results
+        };
+    } catch (error) {
+        console.error('Error fetching election results:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Approve election result
+ */
+async function approveElectionResult(resultId, adminId) {
+    try {
+        await updateDoc(doc(db, COLLECTIONS.ELECTION_RESULTS, resultId), {
+            status: 'approved',
+            verifiedBy: adminId,
+            verifiedAt: getCurrentTimestamp(),
+            updatedAt: getCurrentTimestamp()
+        });
+        
+        // Get result data to update election summary
+        const resultDoc = await getDoc(doc(db, COLLECTIONS.ELECTION_RESULTS, resultId));
+        const resultData = resultDoc.data();
+        
+        if (resultData) {
+            const electionId = resultData.electionId;
+            const electionDoc = await getDoc(doc(db, COLLECTIONS.ELECTIONS, electionId));
+            const electionData = electionDoc.data();
+            
+            if (electionData) {
+                // Update election results summary
+                const summary = electionData.resultsSummary || {
+                    totalVotes: 0,
+                    validVotes: 0,
+                    rejectedVotes: 0,
+                    turnout: 0,
+                    partyResults: {}
+                };
+                
+                summary.totalVotes += resultData.accreditedVoters || 0;
+                summary.validVotes += resultData.validVotes || 0;
+                summary.rejectedVotes += resultData.rejectedVotes || 0;
+                
+                // Update party results
+                const partyVotes = resultData.partyVotes || {};
+                for (const [party, votes] of Object.entries(partyVotes)) {
+                    summary.partyResults[party] = (summary.partyResults[party] || 0) + votes;
+                }
+                
+                // Calculate turnout
+                const totalRegistered = electionData.totalPollingUnits || 0;
+                if (totalRegistered > 0) {
+                    summary.turnout = (summary.totalVotes / totalRegistered) * 100;
+                }
+                
+                await updateDoc(doc(db, COLLECTIONS.ELECTIONS, electionId), {
+                    resultsSummary: summary,
+                    updatedAt: getCurrentTimestamp()
+                });
+            }
+        }
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Error approving result:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
 }
 
 // ============================================
 // AGENT FUNCTIONS
 // ============================================
 
-/**
- * Get agent data by UID
- */
 async function getAgentData(uid) {
     try {
         const docRef = doc(db, COLLECTIONS.AGENTS, uid);
@@ -273,9 +860,6 @@ async function getAgentData(uid) {
     }
 }
 
-/**
- * Get all agents (Admin only)
- */
 async function getAllAgents() {
     try {
         const querySnapshot = await getDocs(collection(db, COLLECTIONS.AGENTS));
@@ -296,9 +880,6 @@ async function getAllAgents() {
     }
 }
 
-/**
- * Update agent data
- */
 async function updateAgentData(uid, data) {
     try {
         await updateDoc(doc(db, COLLECTIONS.AGENTS, uid), {
@@ -315,20 +896,10 @@ async function updateAgentData(uid, data) {
     }
 }
 
-/**
- * Verify agent
- */
-async function verifyAgent(uid) {
-    return await updateAgentData(uid, { isVerified: true });
-}
-
 // ============================================
 // POLLING UNIT FUNCTIONS
 // ============================================
 
-/**
- * Get polling unit by UID
- */
 async function getPollingUnit(uid) {
     try {
         const docRef = doc(db, COLLECTIONS.POLLING_UNITS, uid);
@@ -354,36 +925,6 @@ async function getPollingUnit(uid) {
     }
 }
 
-/**
- * Get all polling units by LGA
- */
-async function getPollingUnitsByLGA(lga) {
-    try {
-        const q = query(
-            collection(db, COLLECTIONS.POLLING_UNITS),
-            where('lga', '==', lga)
-        );
-        const querySnapshot = await getDocs(q);
-        const units = [];
-        querySnapshot.forEach((doc) => {
-            units.push({ id: doc.id, ...doc.data() });
-        });
-        return {
-            success: true,
-            data: units
-        };
-    } catch (error) {
-        console.error('Error fetching polling units:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-/**
- * Get all polling units
- */
 async function getAllPollingUnits() {
     try {
         const querySnapshot = await getDocs(collection(db, COLLECTIONS.POLLING_UNITS));
@@ -405,270 +946,9 @@ async function getAllPollingUnits() {
 }
 
 // ============================================
-// RESULT FUNCTIONS
-// ============================================
-
-/**
- * Submit election result
- */
-async function submitResult(agentId, resultData) {
-    try {
-        const resultId = generateId();
-        const data = {
-            resultId: resultId,
-            agentId: agentId,
-            pollingUnitUID: resultData.pollingUnitUID,
-            lga: resultData.lga,
-            ward: resultData.ward,
-            registeredVoters: resultData.registeredVoters,
-            accreditedVoters: resultData.accreditedVoters,
-            validVotes: resultData.validVotes,
-            rejectedVotes: resultData.rejectedVotes,
-            partyVotes: resultData.partyVotes,
-            totalPartyVotes: Object.values(resultData.partyVotes).reduce((a, b) => a + b, 0),
-            status: 'pending', // pending, approved, rejected
-            submittedAt: getCurrentTimestamp(),
-            updatedAt: getCurrentTimestamp(),
-            verifiedBy: null,
-            verifiedAt: null,
-            notes: resultData.notes || '',
-            ipAddress: resultData.ipAddress || '',
-            deviceInfo: resultData.deviceInfo || {}
-        };
-        
-        // Save result
-        await setDoc(doc(db, COLLECTIONS.RESULTS, resultId), data);
-        
-        // Update agent submission stats
-        const statsRef = doc(db, COLLECTIONS.AGENTS, agentId, 'history', 'stats');
-        await updateDoc(statsRef, {
-            totalSubmissions: increment(1),
-            lastSubmission: getCurrentTimestamp()
-        });
-        
-        // Add to submission history
-        await setDoc(doc(db, COLLECTIONS.AGENTS, agentId, 'history', resultId), {
-            resultId: resultId,
-            pollingUnitUID: resultData.pollingUnitUID,
-            accreditedVoters: resultData.accreditedVoters,
-            validVotes: resultData.validVotes,
-            status: 'pending',
-            submittedAt: getCurrentTimestamp()
-        });
-        
-        // Log audit
-        await logAudit(agentId, 'SUBMIT_RESULT', COLLECTIONS.RESULTS, resultId, data);
-        
-        return {
-            success: true,
-            resultId: resultId,
-            data: data
-        };
-        
-    } catch (error) {
-        console.error('Error submitting result:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-/**
- * Get results by agent
- */
-async function getAgentResults(agentId) {
-    try {
-        const q = query(
-            collection(db, COLLECTIONS.RESULTS),
-            where('agentId', '==', agentId),
-            orderBy('submittedAt', 'desc')
-        );
-        const querySnapshot = await getDocs(q);
-        const results = [];
-        querySnapshot.forEach((doc) => {
-            results.push({ id: doc.id, ...doc.data() });
-        });
-        return {
-            success: true,
-            data: results
-        };
-    } catch (error) {
-        console.error('Error fetching results:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-/**
- * Get results by LGA
- */
-async function getLgaResults(lga) {
-    try {
-        const q = query(
-            collection(db, COLLECTIONS.RESULTS),
-            where('lga', '==', lga),
-            where('status', '==', 'approved')
-        );
-        const querySnapshot = await getDocs(q);
-        const results = [];
-        querySnapshot.forEach((doc) => {
-            results.push({ id: doc.id, ...doc.data() });
-        });
-        return {
-            success: true,
-            data: results
-        };
-    } catch (error) {
-        console.error('Error fetching LGA results:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-/**
- * Get all results (Admin only)
- */
-async function getAllResults() {
-    try {
-        const q = query(
-            collection(db, COLLECTIONS.RESULTS),
-            orderBy('submittedAt', 'desc')
-        );
-        const querySnapshot = await getDocs(q);
-        const results = [];
-        querySnapshot.forEach((doc) => {
-            results.push({ id: doc.id, ...doc.data() });
-        });
-        return {
-            success: true,
-            data: results
-        };
-    } catch (error) {
-        console.error('Error fetching all results:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-/**
- * Approve result (Admin only)
- */
-async function approveResult(resultId, adminId) {
-    try {
-        await updateDoc(doc(db, COLLECTIONS.RESULTS, resultId), {
-            status: 'approved',
-            verifiedBy: adminId,
-            verifiedAt: getCurrentTimestamp(),
-            updatedAt: getCurrentTimestamp()
-        });
-        
-        // Log audit
-        await logAudit(adminId, 'APPROVE_RESULT', COLLECTIONS.RESULTS, resultId, { status: 'approved' });
-        
-        return { success: true };
-    } catch (error) {
-        console.error('Error approving result:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-/**
- * Reject result (Admin only)
- */
-async function rejectResult(resultId, adminId, reason) {
-    try {
-        await updateDoc(doc(db, COLLECTIONS.RESULTS, resultId), {
-            status: 'rejected',
-            verifiedBy: adminId,
-            verifiedAt: getCurrentTimestamp(),
-            updatedAt: getCurrentTimestamp(),
-            rejectionReason: reason
-        });
-        
-        // Log audit
-        await logAudit(adminId, 'REJECT_RESULT', COLLECTIONS.RESULTS, resultId, { status: 'rejected', reason });
-        
-        return { success: true };
-    } catch (error) {
-        console.error('Error rejecting result:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-// ============================================
-// LGA AND WARD FUNCTIONS
-// ============================================
-
-/**
- * Get all LGAs
- */
-async function getAllLGAs() {
-    try {
-        const querySnapshot = await getDocs(collection(db, COLLECTIONS.LGAS));
-        const lgas = [];
-        querySnapshot.forEach((doc) => {
-            lgas.push({ id: doc.id, ...doc.data() });
-        });
-        return {
-            success: true,
-            data: lgas
-        };
-    } catch (error) {
-        console.error('Error fetching LGAs:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-/**
- * Get wards by LGA
- */
-async function getWardsByLGA(lgaId) {
-    try {
-        const q = query(
-            collection(db, COLLECTIONS.WARDS),
-            where('lgaId', '==', lgaId)
-        );
-        const querySnapshot = await getDocs(q);
-        const wards = [];
-        querySnapshot.forEach((doc) => {
-            wards.push({ id: doc.id, ...doc.data() });
-        });
-        return {
-            success: true,
-            data: wards
-        };
-    } catch (error) {
-        console.error('Error fetching wards:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-// ============================================
 // AUDIT LOG FUNCTIONS
 // ============================================
 
-/**
- * Log audit entry
- */
 async function logAudit(userId, action, collection, recordId, data) {
     try {
         const auditData = {
@@ -676,9 +956,9 @@ async function logAudit(userId, action, collection, recordId, data) {
             action: action,
             collection: collection,
             recordId: recordId,
-            data: data,
+            data: data || {},
             timestamp: getCurrentTimestamp(),
-            ipAddress: data?.ipAddress || '',
+            ipAddress: '',
             userAgent: navigator.userAgent || ''
         };
         
@@ -693,9 +973,6 @@ async function logAudit(userId, action, collection, recordId, data) {
     }
 }
 
-/**
- * Get audit logs
- */
 async function getAuditLogs(limit = 100) {
     try {
         const q = query(
@@ -722,144 +999,9 @@ async function getAuditLogs(limit = 100) {
 }
 
 // ============================================
-// REAL-TIME SUBSCRIPTIONS
-// ============================================
-
-/**
- * Subscribe to real-time results
- */
-function subscribeToResults(callback) {
-    const q = query(
-        collection(db, COLLECTIONS.RESULTS),
-        orderBy('submittedAt', 'desc'),
-        limit(50)
-    );
-    
-    return onSnapshot(q, (snapshot) => {
-        const results = [];
-        snapshot.forEach((doc) => {
-            results.push({ id: doc.id, ...doc.data() });
-        });
-        callback(results);
-    }, (error) => {
-        console.error('Error subscribing to results:', error);
-    });
-}
-
-/**
- * Subscribe to agent's results
- */
-function subscribeToAgentResults(agentId, callback) {
-    const q = query(
-        collection(db, COLLECTIONS.RESULTS),
-        where('agentId', '==', agentId),
-        orderBy('submittedAt', 'desc')
-    );
-    
-    return onSnapshot(q, (snapshot) => {
-        const results = [];
-        snapshot.forEach((doc) => {
-            results.push({ id: doc.id, ...doc.data() });
-        });
-        callback(results);
-    }, (error) => {
-        console.error('Error subscribing to agent results:', error);
-    });
-}
-
-/**
- * Subscribe to LGA results
- */
-function subscribeToLgaResults(lga, callback) {
-    const q = query(
-        collection(db, COLLECTIONS.RESULTS),
-        where('lga', '==', lga),
-        where('status', '==', 'approved'),
-        orderBy('submittedAt', 'desc')
-    );
-    
-    return onSnapshot(q, (snapshot) => {
-        const results = [];
-        snapshot.forEach((doc) => {
-            results.push({ id: doc.id, ...doc.data() });
-        });
-        callback(results);
-    }, (error) => {
-        console.error('Error subscribing to LGA results:', error);
-    });
-}
-
-// ============================================
-// STORAGE FUNCTIONS
-// ============================================
-
-/**
- * Upload agent profile image
- */
-async function uploadProfileImage(uid, file) {
-    try {
-        const storageRef = ref(storage, `agents/${uid}/profile.jpg`);
-        await uploadBytes(storageRef, file);
-        const downloadURL = await getDownloadURL(storageRef);
-        
-        // Update agent data
-        await updateDoc(doc(db, COLLECTIONS.AGENTS, uid), {
-            profileImage: downloadURL,
-            updatedAt: getCurrentTimestamp()
-        });
-        
-        return {
-            success: true,
-            url: downloadURL
-        };
-    } catch (error) {
-        console.error('Error uploading profile image:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-/**
- * Upload result attachment
- */
-async function uploadResultAttachment(resultId, file) {
-    try {
-        const storageRef = ref(storage, `results/${resultId}/${file.name}`);
-        await uploadBytes(storageRef, file);
-        const downloadURL = await getDownloadURL(storageRef);
-        
-        // Update result with attachment
-        await updateDoc(doc(db, COLLECTIONS.RESULTS, resultId), {
-            attachments: arrayUnion({
-                name: file.name,
-                url: downloadURL,
-                uploadedAt: getCurrentTimestamp()
-            }),
-            updatedAt: getCurrentTimestamp()
-        });
-        
-        return {
-            success: true,
-            url: downloadURL
-        };
-    } catch (error) {
-        console.error('Error uploading attachment:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-}
-
-// ============================================
 // NOTIFICATION FUNCTIONS
 // ============================================
 
-/**
- * Send notification to agent
- */
 async function sendNotification(agentId, title, message, type = 'info') {
     try {
         await setDoc(doc(db, COLLECTIONS.NOTIFICATIONS, generateId()), {
@@ -880,9 +1022,6 @@ async function sendNotification(agentId, title, message, type = 'info') {
     }
 }
 
-/**
- * Get agent notifications
- */
 async function getAgentNotifications(agentId) {
     try {
         const q = query(
@@ -909,60 +1048,37 @@ async function getAgentNotifications(agentId) {
     }
 }
 
-/**
- * Mark notification as read
- */
-async function markNotificationRead(notificationId) {
-    try {
-        await updateDoc(doc(db, COLLECTIONS.NOTIFICATIONS, notificationId), {
-            isRead: true
+// ============================================
+// REAL-TIME SUBSCRIPTIONS
+// ============================================
+
+function subscribeToElectionResults(electionId, callback) {
+    const q = query(
+        collection(db, COLLECTIONS.ELECTION_RESULTS),
+        where('electionId', '==', electionId),
+        where('status', '==', 'approved'),
+        orderBy('submittedAt', 'desc')
+    );
+    
+    return onSnapshot(q, (snapshot) => {
+        const results = [];
+        snapshot.forEach((doc) => {
+            results.push({ id: doc.id, ...doc.data() });
         });
-        return { success: true };
-    } catch (error) {
-        console.error('Error marking notification:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
+        callback(results);
+    }, (error) => {
+        console.error('Error subscribing to election results:', error);
+    });
 }
 
-// ============================================
-// DATA SEEDING (For Development)
-// ============================================
-
-/**
- * Seed LGAs into Firestore
- */
-async function seedLGAs() {
-    const lgas = [
-        { id: '001', name: 'Bauchi', state: 'Bauchi' },
-        { id: '002', name: 'Toro', state: 'Bauchi' },
-        { id: '003', name: 'Ningi', state: 'Bauchi' },
-        { id: '004', name: 'Katagum', state: 'Bauchi' },
-        { id: '005', name: 'Gamawa', state: 'Bauchi' },
-        { id: '006', name: 'Shira', state: 'Bauchi' },
-        { id: '007', name: 'Alkaleri', state: 'Bauchi' },
-        { id: '008', name: 'Darazo', state: 'Bauchi' },
-        { id: '009', name: 'Ganjuwa', state: 'Bauchi' },
-        { id: '010', name: 'Misau', state: 'Bauchi' },
-        { id: '011', name: 'Tafawa-Balewa', state: 'Bauchi' },
-        { id: '012', name: 'Itas/Gadau', state: 'Bauchi' },
-        { id: '013', name: 'Kirfi', state: 'Bauchi' },
-        { id: '014', name: 'Dambam', state: 'Bauchi' },
-        { id: '015', name: 'Giade', state: 'Bauchi' },
-        { id: '016', name: 'Warji', state: 'Bauchi' },
-        { id: '017', name: "Jama'are", state: 'Bauchi' },
-        { id: '018', name: 'Dass', state: 'Bauchi' },
-        { id: '019', name: 'Bogoro', state: 'Bauchi' },
-        { id: '020', name: 'Zaki', state: 'Bauchi' }
-    ];
-    
-    for (const lga of lgas) {
-        await setDoc(doc(db, COLLECTIONS.LGAS, lga.id), lga);
-    }
-    
-    console.log('✅ LGAs seeded successfully!');
+function subscribeToElection(electionId, callback) {
+    return onSnapshot(doc(db, COLLECTIONS.ELECTIONS, electionId), (doc) => {
+        if (doc.exists()) {
+            callback({ id: doc.id, ...doc.data() });
+        }
+    }, (error) => {
+        console.error('Error subscribing to election:', error);
+    });
 }
 
 // ============================================
@@ -984,46 +1100,48 @@ export {
     formatTimestamp,
     getCurrentTimestamp,
     
+    // Constants
+    ELECTION_TYPES,
+    ELECTION_STATUS,
+    getElectionTypeLabel,
+    getStatusBadge,
+    
     // Agent
     getAgentData,
     getAllAgents,
     updateAgentData,
-    verifyAgent,
     
     // Polling Units
     getPollingUnit,
-    getPollingUnitsByLGA,
     getAllPollingUnits,
     
-    // Results
-    submitResult,
-    getAgentResults,
-    getLgaResults,
-    getAllResults,
-    approveResult,
-    rejectResult,
-    subscribeToResults,
-    subscribeToAgentResults,
-    subscribeToLgaResults,
+    // Election Management (Admin)
+    createElection,
+    getAllElections,
+    getElection,
+    updateElection,
+    deleteElection,
+    getElectionsByType,
+    getActiveElections,
     
-    // LGA/Ward
-    getAllLGAs,
-    getWardsByLGA,
+    // Agent Assignment (Admin)
+    assignAgentToElection,
+    getElectionAgents,
+    getAgentElections,
+    removeAgentFromElection,
+    
+    // Election Results
+    submitElectionResult,
+    getElectionResults,
+    approveElectionResult,
+    subscribeToElectionResults,
+    subscribeToElection,
     
     // Audit
     logAudit,
     getAuditLogs,
     
-    // Storage
-    storage,
-    uploadProfileImage,
-    uploadResultAttachment,
-    
     // Notifications
     sendNotification,
-    getAgentNotifications,
-    markNotificationRead,
-    
-    // Seed
-    seedLGAs
+    getAgentNotifications
 };
